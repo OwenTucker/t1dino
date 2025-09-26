@@ -7,7 +7,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from stable_baselines3.common.monitor import Monitor
 from gymnasium import spaces
 
-bgp_path = r'C:\Users\owenj\source\t1d_emory\d1no\RL4BG'
+bgp_path = r'C:\Users\Owen Tucker\work\t1dino\RL4BG'
 if bgp_path not in sys.path:
     sys.path.insert(0, bgp_path)
 
@@ -59,6 +59,30 @@ class GymToGymnasiumWrapper(gym.Env):
     def close(self):
         return self.env.close()
 
+class NextStateRewardWrapper(gym.Wrapper):
+    def __init__(self, env):
+        super().__init__(env)
+        self.last_bg = None
+    
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        self.last_bg = obs[47] 
+        return obs, info
+    
+    def step(self, action): 
+        '''
+        This properly defines our risk func, for our (s, a) pair, we take a step and the resulting risk
+        is calculated here, which is -risk(b(t+1))
+        '''
+        obs, reward, done, truncated, info = self.env.step(action)
+        next_bg = obs[47]
+        bg = max(1, next_bg)
+        fBG = 3.5506 * (np.log(bg)**0.8353 - 3.7932)
+        risk = 10 * (fBG)**2
+        reward = -1 * risk
+        
+        return obs, reward, done, truncated, info
+
 def make_bgp_env(patient_name='adolescent#002', seed=0):
     env = DeepSACT1DEnv(
         reward_fun=magni_reward,
@@ -105,6 +129,7 @@ def make_bgp_env(patient_name='adolescent#002', seed=0):
         source_dir=bgp_path
     )
     env = GymToGymnasiumWrapper(env) 
+    env = NextStateRewardWrapper(env) 
     return Monitor(env)
 
 def train_sac():
@@ -157,8 +182,8 @@ def train_sac():
     )
     
     model.learn(
-        total_timesteps=2_000_000,
-        callback=eval_callback,
+        total_timesteps=700_000,
+        #callback=eval_callback,
         progress_bar=True,
         log_interval=10
     )
