@@ -83,7 +83,7 @@ class NextStateRewardWrapper(gym.Wrapper):
         
         return obs, reward, done, truncated, info
 
-def make_bgp_env(patient_name='adolescent#002', seed=0):
+def make_bgp_env(patient_name='adolescent#001', seed=0):
     env = DeepSACT1DEnv(
         reward_fun=magni_reward,
         patient_name=patient_name,
@@ -182,7 +182,7 @@ def train_sac():
     )
     
     model.learn(
-        total_timesteps=700_000,
+        total_timesteps=2_000_000,
         #callback=eval_callback,
         progress_bar=True,
         log_interval=10
