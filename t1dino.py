@@ -11,7 +11,7 @@ bgp_path = r'C:\Users\Owen Tucker\work\t1dino\RL4BG'
 if bgp_path not in sys.path:
     sys.path.insert(0, bgp_path)
 
-from bgp.simglucose.envs.simglucose_gym_env import DeepSACT1DEnv
+from bgp.simglucose.envs.exercise_aware_env import DeepSACT1DEnv
 from bgp.rl.reward_functions import magni_reward
 
 class GymToGymnasiumWrapper(gym.Env):
@@ -49,9 +49,9 @@ class GymToGymnasiumWrapper(gym.Env):
         return obs, {}
     
     def step(self, action):
-        obs, reward, done, info = self.env.step(action)
+        obs, reward, done, truncated, info = self.env.step(action)
         obs = np.array(obs).flatten().astype(np.float32)
-        return obs, reward, done, False, info
+        return obs, reward, done, truncated, info
     
     def render(self):
         return self.env.render()
@@ -89,43 +89,19 @@ def make_bgp_env(patient_name='adolescent#001', seed=0):
         patient_name=patient_name,
         seeds={'numpy': seed, 'sensor': seed, 'scenario': seed},
         reset_lim={'lower_lim': 10, 'upper_lim': 1000},
-        time=False,
-        meal=False,
-        bw_meals=True,
-        load=False,
-        use_pid_load=False,
-        hist_init=True,
-        gt=False,
         n_hours=4,
-        norm=False,
-        time_std=None,
-        use_old_patient_env=False,
-        action_cap=None,
-        action_bias=0,
-        action_scale='basal',
-        basal_scaling=43.2,
-        meal_announce=None,
-        residual_basal=False,
-        residual_bolus=False,
-        residual_PID=False,
-        fake_gt=False,
-        fake_real=False,
-        suppress_carbs=False,
-        limited_gt=False,
         termination_penalty=1e5,
-        weekly=False,
         update_seed_on_reset=True,
         deterministic_meal_size=False,
         deterministic_meal_time=False,
         deterministic_meal_occurrence=False,
+        use_pid_load=False,
+        hist_init=True,
         harrison_benedict=True,
         restricted_carb=False,
-        meal_duration=5,
-        rolling_insulin_lim=None,
+        meal_duration=5,  
         universal=False,
         reward_bias=0,
-        carb_error_std=0,
-        carb_miss_prob=0,
         source_dir=bgp_path
     )
     env = GymToGymnasiumWrapper(env) 
@@ -182,8 +158,8 @@ def train_sac():
     )
     
     model.learn(
-        total_timesteps=2_000_000,
-        #callback=eval_callback,
+        total_timesteps=1_000_000,
+        callback=eval_callback,
         progress_bar=True,
         log_interval=10
     )

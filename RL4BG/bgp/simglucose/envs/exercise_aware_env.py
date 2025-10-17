@@ -1,14 +1,8 @@
-"""
-Exercise-aware version of DeepSACT1DEnv
-Save this as: bgp/simglucose/envs/exercise_aware_env.py
-"""
-
 from bgp.simglucose.simulation.env import T1DSimEnv
 from bgp.simglucose.patient.t1dpatient import T1DPatientNew
 from bgp.simglucose.sensor.cgm import CGMSensor
 from bgp.simglucose.actuator.pump import InsulinPump
-from bgp.simglucose.simulation.scenario_gen import (RandomBalancedScenario, SemiRandomBalancedScenario,
-                                                    CustomBalancedScenario)
+from bgp.simglucose.simulation.scenario_gen import RandomBalancedScenario
 from bgp.simglucose.controller.base import Action
 from bgp.simglucose.analysis.risk import magni_risk_index
 from bgp.rl.helpers import Seed
@@ -30,478 +24,227 @@ class DeepSACT1DEnv(gym.Env):
     
     metadata = {'render.modes': ['human']}
 
-    def __init__(self, reward_fun, patient_name=None, seeds=None,
-                 reset_lim=None, time=False, meal=False, gt=False, load=False,
-                 bw_meals=False, n_hours=24, time_std=None, norm=False, use_old_patient_env=False, action_cap=0.1,
-                 action_bias=0, action_scale=1, basal_scaling=216.0, meal_announce=None,
-                 residual_basal=False, residual_bolus=False, residual_PID=False, fake_gt=False, fake_real=False,
-                 suppress_carbs=False, limited_gt=False, termination_penalty=None, weekly=False,
-                 use_model=False, model=None, model_device='cpu', update_seed_on_reset=False,
-                 deterministic_meal_size=False, deterministic_meal_time=False, deterministic_meal_occurrence=False,
-                 use_pid_load=False, hist_init=False, start_date=None, use_custom_meal=False, custom_meal_num=3,
-                 custom_meal_size=1, starting_glucose=None,
-                 harrison_benedict=False, restricted_carb=False, meal_duration=1, rolling_insulin_lim=None,
-                 universal=False, unrealistic=False, reward_bias=0, carb_error_std=0, carb_miss_prob=0, source_dir=None,
-                 **kwargs):
+    def __init__(self, reward_fun, patient_name=None, seeds=None, reset_lim=None, 
+                 n_hours=4, termination_penalty=None, update_seed_on_reset=False,
+                 deterministic_meal_size=False, deterministic_meal_time=False, 
+                 deterministic_meal_occurrence=False, use_pid_load=False, hist_init=False,
+                 harrison_benedict=False, restricted_carb=False, meal_duration=1, 
+                 universal=False, reward_bias=0, source_dir=None, **kwargs):
       
         self.source_dir = source_dir
-        self.patient_para_file = '{}/bgp/simglucose/params/vpatient_params.csv'.format(self.source_dir)
-        self.control_quest = '{}/bgp/simglucose/params/Quest2.csv'.format(self.source_dir)
-        self.pid_para_file = '{}/bgp/simglucose/params/pid_params.csv'.format(self.source_dir)
-        self.pid_env_path = '{}/bgp/simglucose/params'.format(self.source_dir)
-        self.sensor_para_file = '{}/bgp/simglucose/params/sensor_params.csv'.format(self.source_dir)
-        self.insulin_pump_para_file = '{}/bgp/simglucose/params/pump_params.csv'.format(self.source_dir)
-        
-        # Exercise parameters from Alkhateeb et al. 2021 Model 6
-        self.exercise_params = {
-            'e1_intensity': 0.0039,  
-            'e2_intensity': 0.0021,   
-            'e2_duration': 0.0011,   
-        }
-       
-        self.exercise_state = {
-            'is_exercising': False,
-            'intensity_percent': 0.0,
-            'duration_minutes': 0.0,
-            'start_timestep': 0
-        }
-        
-        self.exercise_schedule = []
+        self.patient_para_file = f'{source_dir}/bgp/simglucose/params/vpatient_params.csv'
+        self.control_quest = f'{source_dir}/bgp/simglucose/params/Quest2.csv'
+        self.pid_para_file = f'{source_dir}/bgp/simglucose/params/pid_params.csv'
+        self.pid_env_path = f'{source_dir}/bgp/simglucose/params'
+        self.sensor_para_file = f'{source_dir}/bgp/simglucose/params/sensor_params.csv'
+        self.insulin_pump_para_file = f'{source_dir}/bgp/simglucose/params/pump_params.csv'
+    
+        self.e1 = None  # glucose effectiveness gain
+        self.e2 = None  # insulin sensitivity gain
+        self._baseline_vmx = 0
+        self._baseline_kp3 = None  #storing the baselines so we multiple correctly.
+    
+        self.exercise_schedule = {}  
+        self.current_exercise = None  
         self.timestep = 0
-        self._original_patient_params = None
+        self._original_params = None
         
-     
-        self.universe = (['child#0{}'.format(str(i).zfill(2)) for i in range(1, 6)] +
-                         ['adolescent#0{}'.format(str(i).zfill(2)) for i in range(1, 6)] +
-                         ['adult#0{}'.format(str(i).zfill(2)) for i in range(1, 6)])
+        self.universe = (['child#0{}'.format(str(i).zfill(2)) for i in range(1, 11)] +
+                         ['adolescent#0{}'.format(str(i).zfill(2)) for i in range(1, 11)] +
+                         ['adult#0{}'.format(str(i).zfill(2)) for i in range(1, 11)])
         self.universal = universal
+
         if seeds is None:
             seed_list = self._seed()
             seeds = Seed(numpy_seed=seed_list[0], sensor_seed=seed_list[1], scenario_seed=seed_list[2])
+        
         if patient_name is None:
-            if self.universal:
-                patient_name = np.random.choice(self.universe)
-            else:
-                patient_name = 'adolescent#001'
+            patient_name = np.random.choice(self.universe) if self.universal else 'adolescent#001'
+        
         np.random.seed(seeds['numpy'])
         self.seeds = seeds
-        self.sample_time = 5
+
+        self.sample_time = 5  # minutes per timestep
         self.day = int(1440 / self.sample_time)
         self.state_hist = int((n_hours * 60) / self.sample_time)
-        self.time = time
-        self.meal = meal
-        self.norm = norm
-        self.gt = gt
         self.reward_fun = reward_fun
         self.reward_bias = reward_bias
-        self.action_cap = action_cap
-        self.action_bias = action_bias
-        self.action_scale = action_scale
-        self.basal_scaling = basal_scaling
-        self.meal_announce = meal_announce
-        self.meal_duration = meal_duration
+        self.termination_penalty = termination_penalty
         self.deterministic_meal_size = deterministic_meal_size
         self.deterministic_meal_time = deterministic_meal_time
         self.deterministic_meal_occurrence = deterministic_meal_occurrence
-        self.residual_basal = residual_basal
-        self.residual_bolus = residual_bolus
-        self.carb_miss_prob = carb_miss_prob
-        self.carb_error_std = carb_error_std
-        self.residual_PID = residual_PID
         self.use_pid_load = use_pid_load
-        self.fake_gt = fake_gt
-        self.fake_real = fake_real
-        self.suppress_carbs = suppress_carbs
-        self.limited_gt = limited_gt
-        self.termination_penalty = termination_penalty
-        self.target = 140
-        self.low_lim = 140
-        self.cooldown = 180
-        self.last_cf = self.cooldown + 1
-        self.start_date = start_date
-        self.rolling_insulin_lim = rolling_insulin_lim
-        self.rolling = []
-        if self.start_date is None:
-            start_time = datetime(2018, 1, 1, 0, 0, 0)
-        else:
-            start_time = datetime(self.start_date.year, self.start_date.month, self.start_date.day, 0, 0, 0)
-        assert bw_meals
+        self.hist_init = hist_init
+        self.harrison_benedict = harrison_benedict
+        self.restricted_carb = restricted_carb
+        self.meal_duration = meal_duration
+        self.update_seed_on_reset = update_seed_on_reset
+        self.start_time = datetime(2018, 1, 1, 0, 0, 0)
+
         if reset_lim is None:
             self.reset_lim = {'lower_lim': 10, 'upper_lim': 1000}
         else:
             self.reset_lim = reset_lim
-        self.load = load
-        self.hist_init = hist_init
+        
         self.env = None
-        self.use_old_patient_env = use_old_patient_env
-        self.model = model
-        self.model_device = model_device
-        self.use_model = use_model
-        self.harrison_benedict = harrison_benedict
-        self.restricted_carb = restricted_carb
-        self.unrealistic = unrealistic
-        self.start_time = start_time
-        self.time_std = time_std
-        self.weekly = weekly
-        self.update_seed_on_reset = update_seed_on_reset
-        self.use_custom_meal = use_custom_meal
-        self.custom_meal_num = custom_meal_num
-        self.custom_meal_size = custom_meal_size
         self.set_patient_dependent_values(patient_name)
         self.env.scenario.day = 0
 
+    def _estimate_exercise_response(self, patient_params): 
+        e1 = 1.6 #these we will change
+        e2 = .778
+        return e1, e2
+
     def _generate_exercise_schedule(self):
-     
-        self.exercise_schedule = []
+        self.exercise_schedule = {}
         
         for hour in range(24):
-            timestep = hour * 12  # 12 timesteps per hour
-         
-            if hour in [6, 7, 17, 18, 19]:  
-                prob = 0.15
-            else:
-                prob = 0.02  # Low baseline
+            timestep = hour * 12 
+            prob = 0.20 if hour in [6, 7, 17, 18, 19] else (0.10 if hour in [12, 13] else 0.02)
             
             if np.random.random() < prob:
                 start_step = timestep + np.random.randint(0, 12)
-                duration = max(20, np.random.normal(45, 15))  # 20-90 minutes
-                intensity = np.clip(np.random.normal(60, 10), 30, 90)  # 30-90% VO2max
+                PVO2max = np.clip(np.random.uniform(0.25, 0.75), 0.25, 0.75) 
+                duration_min = np.clip(np.random.normal(45, 15), 30, 60)
                 
-                self.exercise_schedule.append({
-                    'start_timestep': start_step,
-                    'duration_minutes': duration,
-                    'intensity_percent': intensity
-                })
+                self.exercise_schedule[start_step] = (PVO2max, duration_min, start_step)
     
-    def _update_exercise_state(self):
-        
-        for event in self.exercise_schedule:
-            if (self.timestep == event['start_timestep'] and 
-                not self.exercise_state['is_exercising']):
-                self.exercise_state.update({
-                    'is_exercising': True,
-                    'intensity_percent': event['intensity_percent'],
-                    'duration_minutes': 0,
-                    'start_timestep': self.timestep
-                })
-                print(f"Exercise started: {event['intensity_percent']:.1f}% VO2max")
-                break
-        
-        if self.exercise_state['is_exercising']:
-            self.exercise_state['duration_minutes'] += 5  # 5-minute timesteps
-            
-            for event in self.exercise_schedule:
-                if (event['start_timestep'] <= self.timestep and 
-                    self.exercise_state['duration_minutes'] >= event['duration_minutes']):
-                    self.exercise_state['is_exercising'] = False
-                    print(f"Exercise ended after {self.exercise_state['duration_minutes']} minutes")
-                    break
-    
-    def _get_exercise_effects(self):
-      
-        if not self.exercise_state['is_exercising']:
-            return {'glucose_effectiveness': 0.0, 'insulin_sensitivity': 0.0}
-        
-        intensity_norm = self.exercise_state['intensity_percent'] / 100.0
-        duration_min = self.exercise_state['duration_minutes']
-        
-     
-        glucose_effectiveness_increase = self.exercise_params['e1_intensity'] * intensity_norm
-        insulin_sensitivity_increase = (
-            self.exercise_params['e2_intensity'] * intensity_norm +
-            self.exercise_params['e2_duration'] * duration_min
-        )
-        
-        return {
-            'glucose_effectiveness': glucose_effectiveness_increase,
-            'insulin_sensitivity': insulin_sensitivity_increase
-        }
-    
-    def _apply_exercise_effects(self):
-        if not self.exercise_state['is_exercising'] or self._original_patient_params is None:
-            return
-        
-        effects = self._get_exercise_effects()
-        
-    
-        try:
-            if hasattr(self.env.patient, '_params'):
-                if hasattr(self.env.patient._params, 'p1'):
-                    self.env.patient._params.p1 = (self._original_patient_params['p1'] + 
-                                                   effects['glucose_effectiveness'])
-                if hasattr(self.env.patient._params, 'p2'):
-                    self.env.patient._params.p2 = (self._original_patient_params['p2'] + 
-                                                   effects['insulin_sensitivity'])
-        except AttributeError:
-            pass  # Graceful handling if patient structure is different
-    
-    def _store_original_patient_params(self):
-        """Store original patient parameters"""
-        try:
-            if hasattr(self.env.patient, '_params'):
-                self._original_patient_params = {
-                    'p1': getattr(self.env.patient._params, 'p1', None),
-                    'p2': getattr(self.env.patient._params, 'p2', None),
-                }
-        except AttributeError:
-            self._original_patient_params = None
-    
-    def _restore_patient_params(self):
-        """Restore original patient parameters"""
-        if self._original_patient_params is None:
-            return
-        
-        try:
-            if hasattr(self.env.patient, '_params'):
-                if hasattr(self.env.patient._params, 'p1') and self._original_patient_params['p1'] is not None:
-                    self.env.patient._params.p1 = self._original_patient_params['p1']
-                if hasattr(self.env.patient._params, 'p2') and self._original_patient_params['p2'] is not None:
-                    self.env.patient._params.p2 = self._original_patient_params['p2']
-        except AttributeError:
-            pass
+    def _get_exercise_effect(self):
+        if self.current_exercise is None:
+            if self.timestep in self.exercise_schedule:
+                self.current_exercise = self.exercise_schedule[self.timestep]
+                PVO2max, duration_min, _ = self.current_exercise
 
-    def pid_load(self, n_days):
-        for i in range(n_days*self.day):
-            b_val = self.pid.step(self.env.CGM_hist[-1])
-            act = Action(basal=0, bolus=b_val)
-            _ = self.env.step(action=act, reward_fun=self.reward_fun, cho=None)
+        if self.current_exercise is None:
+            return 1.0, 1.0
+        
+        PVO2max, duration_min, start_step = self.current_exercise
+        elapsed_min = (self.timestep - start_step) * 5
+        te_hours = elapsed_min / 60.0  
+        if elapsed_min < duration_min:
+            # (insulin-independent glucose uptake)
+            ge_mult = 1.0 + self.e1 * PVO2max
+            
+            # si_mult affects Vmx (insulin sensitivity)
+            si_mult = 1.0 + self.e2 * (PVO2max + te_hours)
+            
+            return si_mult, ge_mult
+
+    def _apply_exercise_to_patient(self, si_mult, ge_mult):
+       
+        self.env.patient._params.Vmx = self._baseline_vmx * si_mult
+        self.env.patient._params.exercise_k1_mult = ge_mult
+        self.env.patient._params.kp3 = self._baseline_kp3 * si_mult
 
     def step(self, action):
-        return self._step(action, cho=None)
-
-    def translate(self, action):
-        if self.action_scale == 'basal':
-            action = (action + self.action_bias) * ((self.ideal_basal * self.basal_scaling) / (1 + self.action_bias))
-        else:
-            action = (action + self.action_bias) * self.action_scale
-        return max(0, action)
-
-    def _step(self, action, cho=None, use_action_scale=True):
-        # Update exercise state
-        self._update_exercise_state()
+     
+        si_mult, ge_mult = self._get_exercise_effect()
+        self._apply_exercise_to_patient(si_mult, ge_mult)
         
-        # Apply exercise effects before simulation step
-        self._apply_exercise_effects()
-        
-        # Original _step code with exercise info added to return
         if type(action) is np.ndarray:
             action = action.item()
-        if use_action_scale:
-            if self.action_scale == 'basal':
-                action = (action + self.action_bias) * ((self.ideal_basal * self.basal_scaling)/(1+self.action_bias))
-            else:
-                action = (action + self.action_bias) * self.action_scale
-        if self.residual_basal:
-            action += self.ideal_basal
-        if self.residual_bolus:
-            ma = self.announce_meal(5)
-            carbs = ma[0]
-            if np.random.uniform() < self.carb_miss_prob:
-                carbs = 0
-            error = np.random.normal(0, self.carb_error_std)
-            carbs = carbs + carbs * error
-            glucose = self.env.CGM_hist[-1]
-            if carbs > 0:
-                carb_correct = carbs / self.CR
-                hyper_correct = (glucose > self.target) * (glucose - self.target) / self.CF
-                hypo_correct = (glucose < self.low_lim) * (self.low_lim - glucose) / self.CF
-                bolus = 0
-                if self.last_cf > self.cooldown:
-                    bolus += hyper_correct - hypo_correct
-                bolus += carb_correct
-                action += bolus / 5.
-                self.last_cf = 0
-            self.last_cf += 5
-        if self.residual_PID:
-            action += self.pid.step(self.env.CGM_hist[-1])
-        if self.action_cap is not None:
-            action = min(self.action_cap, action)
-        if self.rolling_insulin_lim is not None:
-            if np.sum(self.rolling + [action]) > self.rolling_insulin_lim:
-                action = max(0, action - (np.sum(self.rolling + [action]) - self.rolling_insulin_lim))
-            self.rolling.append(action)
-            if len(self.rolling) > 12:
-                self.rolling = self.rolling[1:]
+        
+        action = (action + 0) * ((self.ideal_basal * 43.2) / 1)
+        action = max(0, action)
         
         act = Action(basal=0, bolus=action)
-        _, reward, _, info = self.env.step(act, reward_fun=self.reward_fun, cho=cho)
+        _, reward, _, info = self.env.step(act, reward_fun=self.reward_fun, cho=None)
         
-        # Restore patient parameters after step
-        self._restore_patient_params()
-        
-        # Get extended state including exercise
-        state = self.get_state(self.norm)
+        state = self.get_state(normalize=False)
         done = self.is_done()
-        if done and self.termination_penalty is not None:
-            reward = reward - self.termination_penalty
-        reward = reward + self.reward_bias
+        truncated = (self.timestep >= 2880)
+
+        if done and not truncated and self.termination_penalty is not None:
+            reward = reward - self.termination_penalty  
+
+        truncated = (self.timestep >= 2880)  
         
-        # Add exercise info
         info.update({
-            'exercise_active': self.exercise_state['is_exercising'],
-            'exercise_intensity': self.exercise_state['intensity_percent'],
-            'exercise_duration': self.exercise_state['duration_minutes'],
-            'exercise_effects': self._get_exercise_effects()
+            'exercise_active': self.current_exercise is not None,
+            'si_multiplier': si_mult,
+            'ge_multiplier': ge_mult,
+            'e1': self.e1,
+            'e2': self.e2,
         })
         
         self.timestep += 1
-        return state, reward, done, info
+        return state, reward, done, truncated, info
 
-    def announce_meal(self, meal_announce=None):
-        t = self.env.time.hour * 60 + self.env.time.minute
-        for i, m_t in enumerate(self.env.scenario.scenario['meal']['time']):
-            if m_t % 5 != 0:
-                m_tr = m_t - (m_t % 5) + 5
-            else:
-                m_tr = m_t
-            if meal_announce is None:
-                ma = self.meal_announce
-            else:
-                ma = meal_announce
-            if t < m_tr <= t + ma:
-                return self.env.scenario.scenario['meal']['amount'][i], m_tr - t
-        return 0, 0
+    def get_state(self, normalize=False):
+        bg = self.env.CGM_hist[-self.state_hist:]
+        insulin = self.env.insulin_hist[-self.state_hist:]
+        
+        if normalize:
+            bg = np.array(bg) / 400.
+            insulin = np.array(insulin) * 10
+        
+        if len(bg) < self.state_hist:
+            bg = np.concatenate((np.full(self.state_hist - len(bg), -1), bg))
+        if len(insulin) < self.state_hist:
+            insulin = np.concatenate((np.full(self.state_hist - len(insulin), -1), insulin))
+        
+        return np.stack([bg, insulin]).flatten()
+
+    def reset(self):
+        self.timestep = 0
+        self.current_exercise = None
+        
+        self._generate_exercise_schedule()
+        
+        print(f"Generated {len(self.exercise_schedule)} exercise events for {self.patient_name}")
+        print(f"Patient exercise response: e1={self.e1:.3f}, e2={self.e2:.3f}")
+        
+        if self.update_seed_on_reset:
+            self.increment_seed()
+        
+        if self.universal:
+            patient_name = np.random.choice(self.universe)
+            self.set_patient_dependent_values(patient_name)
+        
+        self.env.sensor.seed = self.seeds['sensor']
+        self.env.scenario.seed = self.seeds['scenario']
+        self.env.reset()
+        self.pid.reset()
+        
+        if self.use_pid_load:
+            self.pid_load(1)
+        if self.hist_init:
+            self._hist_init()
+        
+        return self.get_state(normalize=False)
+
+    def pid_load(self, n_days):
+        for i in range(n_days * self.day):
+            b_val = self.pid.step(self.env.CGM_hist[-1])
+            act = Action(basal=0, bolus=b_val)
+            _ = self.env.step(action=act, reward_fun=self.reward_fun, cho=None)
 
     def calculate_iob(self):
         ins = self.env.insulin_hist
         return np.dot(np.flip(self.iob, axis=0)[-len(ins):], ins[-len(self.iob):])
 
-    def get_state(self, normalize=False):
-        """Get state with exercise information appended"""
-        # Get original state
-        bg = self.env.CGM_hist[-self.state_hist:]
-        insulin = self.env.insulin_hist[-self.state_hist:]
-        if normalize:
-            bg = np.array(bg)/400.
-            insulin = np.array(insulin) * 10
-        if len(bg) < self.state_hist:
-            bg = np.concatenate((np.full(self.state_hist - len(bg), -1), bg))
-        if len(insulin) < self.state_hist:
-            insulin = np.concatenate((np.full(self.state_hist - len(insulin), -1), insulin))
-        return_arr = [bg, insulin]
-        
-        # Add all original state components
-        if self.time:
-            time_dt = self.env.time_hist[-self.state_hist:]
-            time = np.array([(t.minute + 60 * t.hour) / self.sample_time for t in time_dt])
-            sin_time = np.sin(time * 2 * np.pi / self.day)
-            cos_time = np.cos(time * 2 * np.pi / self.day)
-            if len(sin_time) < self.state_hist:
-                sin_time = np.concatenate((np.full(self.state_hist - len(sin_time), -1), sin_time))
-            if len(cos_time) < self.state_hist:
-                cos_time = np.concatenate((np.full(self.state_hist - len(cos_time), -1), cos_time))
-            return_arr.extend([sin_time, cos_time])
-            if self.weekly:
-                if self.env.scenario.day == 5 or self.env.scenario.day == 6:
-                    return_arr.append(np.full(self.state_hist, 1))
-                else:
-                    return_arr.append(np.full(self.state_hist, 0))
-        
-        if self.meal:
-            cho = self.env.CHO_hist[-self.state_hist:]
-            if normalize:
-                cho = np.array(cho)/20.
-            if len(cho) < self.state_hist:
-                cho = np.concatenate((np.full(self.state_hist - len(cho), -1), cho))
-            return_arr.append(cho)
-        
-        if self.meal_announce is not None:
-            meal_val, meal_time = self.announce_meal()
-            future_cho = np.full(self.state_hist, meal_val)
-            return_arr.append(future_cho)
-            future_time = np.full(self.state_hist, meal_time)
-            return_arr.append(future_time)
-        
-        # Handle ground truth cases
-        if self.fake_real:
-            state = self.env.patient.state
-            return np.stack([state for _ in range(self.state_hist)]).T.flatten()
-        
-        if self.gt:
-            if self.fake_gt:
-                iob = self.calculate_iob()
-                cgm = self.env.CGM_hist[-1]
-                if normalize:
-                    state = np.array([cgm/400., iob*10])
-                else:
-                    state = np.array([cgm, iob])
-            else:
-                state = self.env.patient.state
-            if self.meal_announce is not None:
-                meal_val, meal_time = self.announce_meal()
-                state = np.concatenate((state, np.array([meal_val, meal_time])))
-            if normalize:
-                norm_arr = np.array([4.86688301e+03, 4.95825609e+03, 2.52219425e+03, 2.73376341e+02,
-                                     1.56207049e+02, 9.72051746e+00, 7.65293763e+01, 1.76808549e+02,
-                                     1.76634852e+02, 5.66410518e+00, 1.28448645e+02, 2.49195394e+02,
-                                     2.73250649e+02, 7.70883882e+00, 1.63778163e+00])
-                if self.meal_announce is not None:
-                    state = state/norm_arr
-                else:
-                    state = state/norm_arr[:-2]
-            if self.suppress_carbs:
-                state[:3] = 0.
-            if self.limited_gt:
-                state = np.array([state[3], self.calculate_iob()])
-            
-            # Add exercise state for GT mode (5 dimensions)
-            exercise_state = self._get_exercise_state_vector()
-            return np.concatenate([state, exercise_state])
-        
-        # Add exercise state (5 channels) for non-GT mode
-        exercise_state = self._get_exercise_state_vector()
-        for i, ex_val in enumerate(exercise_state):
-            return_arr.append(np.full(self.state_hist, ex_val))
-        
-        return np.stack(return_arr).flatten()
-    
-    def _get_exercise_state_vector(self):
-        """Get 5-dimensional exercise state vector"""
-        if self.exercise_state['is_exercising']:
-            intensity_norm = self.exercise_state['intensity_percent'] / 100.0
-            duration_norm = min(self.exercise_state['duration_minutes'] / 120.0, 1.0)
-            time_norm = min(self.exercise_state['duration_minutes'] / 90.0, 1.0)
-            effects = self._get_exercise_effects()
-            effect_magnitude = (effects['glucose_effectiveness'] + effects['insulin_sensitivity']) * 100
-        else:
-            intensity_norm = 0.0
-            duration_norm = 0.0
-            time_norm = 0.0
-            effect_magnitude = 0.0
-        
-        return np.array([
-            float(self.exercise_state['is_exercising']),
-            intensity_norm,
-            duration_norm,
-            time_norm,
-            effect_magnitude
-        ])
-
-    # Keep all original methods unchanged
     def avg_risk(self):
-        return np.mean(self.env.risk_hist[max(self.state_hist, 288):])
+        return np.mean(self.env.risk_hist[max(self.state_hist, 2880):])
 
     def avg_magni_risk(self):
-        return np.mean(self.env.magni_risk_hist[max(self.state_hist, 288):])
+        return np.mean(self.env.magni_risk_hist[max(self.state_hist, 2880):])
 
     def glycemic_report(self):
-        bg = np.array(self.env.BG_hist[max(self.state_hist, 288):])
-        ins = np.array(self.env.insulin_hist[max(self.state_hist, 288):])
-        hypo = (bg < 70).sum()/len(bg)
-        hyper = (bg > 180).sum()/len(bg)
-        euglycemic = 1 - (hypo+hyper)
+        bg = np.array(self.env.BG_hist[max(self.state_hist, 2880):])
+        ins = np.array(self.env.insulin_hist[max(self.state_hist, 2880):])
+        hypo = (bg < 70).sum() / len(bg)
+        hyper = (bg > 180).sum() / len(bg)
+        euglycemic = 1 - (hypo + hyper)
         return bg, euglycemic, hypo, hyper, ins
 
     def is_done(self):
-        return self.env.BG_hist[-1] < self.reset_lim['lower_lim'] or self.env.BG_hist[-1] > self.reset_lim['upper_lim']
+        return (self.env.BG_hist[-1] < self.reset_lim['lower_lim'] or 
+                self.env.BG_hist[-1] > self.reset_lim['upper_lim'])
 
     def increment_seed(self, incr=1):
         self.seeds['numpy'] += incr
         self.seeds['scenario'] += incr
         self.seeds['sensor'] += incr
-
-    def reset(self):
-        return self._reset()
 
     def set_patient_dependent_values(self, patient_name):
         self.patient_name = patient_name
@@ -513,125 +256,52 @@ class DeepSACT1DEnv(gym.Env):
         self.ideal_basal = self.bw * self.u2ss / 6000.
         self.CR = quest.query('Name=="{}"'.format(patient_name)).CR.item()
         self.CF = quest.query('Name=="{}"'.format(patient_name)).CF.item()
-        if self.rolling_insulin_lim is not None:
-            self.rolling_insulin_lim = ((self.rolling_insulin_lim * self.bw) / self.CR * self.rolling_insulin_lim) / 5
-        else:
-            self.rolling_insulin_lim = None
-        iob_all = joblib.load('{}/iob.pkl'.format(self.pid_env_path))
+        
+        iob_all = joblib.load(f'{self.pid_env_path}/iob.pkl')
         self.iob = iob_all[self.patient_name]
+        
         pid_df = pd.read_csv(self.pid_para_file)
         if patient_name not in pid_df.name.values:
-            raise ValueError('{} not in PID csv'.format(patient_name))
+            raise ValueError(f'{patient_name} not in PID csv')
         pid_params = pid_df.loc[pid_df.name == patient_name].squeeze()
         self.pid = pid.PID(setpoint=pid_params.setpoint,
                            kp=pid_params.kp, ki=pid_params.ki, kd=pid_params.kd)
+        
+        # estimate patient-specific exercise response coefficients
+
+        patient_params = vpatient_params.query('Name=="{}"'.format(patient_name)).squeeze()
+        
+        self.e1, self.e2 = self._estimate_exercise_response(patient_params)
+        
         patient = T1DPatientNew.withName(patient_name, self.patient_para_file)
         sensor = CGMSensor.withName('Dexcom', self.sensor_para_file, seed=self.seeds['sensor'])
-        if self.time_std is None:
-            scenario = RandomBalancedScenario(bw=self.bw, start_time=self.start_time, seed=self.seeds['scenario'],
-                                              kind=self.kind, restricted=self.restricted_carb,
-                                              harrison_benedict=self.harrison_benedict, unrealistic=self.unrealistic,
-                                              deterministic_meal_size=self.deterministic_meal_size,
-                                              deterministic_meal_time=self.deterministic_meal_time,
-                                              deterministic_meal_occurrence=self.deterministic_meal_occurrence,
-                                              meal_duration=self.meal_duration)
-        elif self.use_custom_meal:
-            scenario = CustomBalancedScenario(bw=self.bw, start_time=self.start_time, seed=self.seeds['scenario'],
-                                              num_meals=self.custom_meal_num, size_mult=self.custom_meal_size)
-        else:
-            scenario = SemiRandomBalancedScenario(bw=self.bw, start_time=self.start_time, seed=self.seeds['scenario'],
-                                                  time_std_multiplier=self.time_std, kind=self.kind,
-                                                  harrison_benedict=self.harrison_benedict,
-                                                  meal_duration=self.meal_duration)
+        scenario = RandomBalancedScenario(
+            bw=self.bw, start_time=self.start_time, seed=self.seeds['scenario'],
+            kind=self.kind, restricted=self.restricted_carb,
+            harrison_benedict=self.harrison_benedict, unrealistic=False,
+            deterministic_meal_size=self.deterministic_meal_size,
+            deterministic_meal_time=self.deterministic_meal_time,
+            deterministic_meal_occurrence=self.deterministic_meal_occurrence,
+            meal_duration=self.meal_duration
+        )
         pump = InsulinPump.withName('Insulet', self.insulin_pump_para_file)
-        self.env = T1DSimEnv(patient=patient,
-                             sensor=sensor,
-                             pump=pump,
-                             scenario=scenario,
-                             sample_time=self.sample_time, source_dir=self.source_dir)
+        
+        self.env = T1DSimEnv(patient=patient, sensor=sensor, pump=pump,
+                             scenario=scenario, sample_time=self.sample_time, 
+                             source_dir=self.source_dir)
+        self._baseline_vmx = self.env.patient._params.Vmx  
         if self.hist_init:
-            self.env_init_dict = joblib.load("{}/{}_data.pkl".format(self.pid_env_path, self.patient_name))
+            self.env_init_dict = joblib.load(f"{self.pid_env_path}/{self.patient_name}_data.pkl")
             self.env_init_dict['magni_risk_hist'] = []
             for bg in self.env_init_dict['bg_hist']:
                 self.env_init_dict['magni_risk_hist'].append(magni_risk_index([bg]))
             self._hist_init()
 
-    def _reset(self):
-        # Reset exercise state and generate new schedule
-        self.exercise_state = {
-            'is_exercising': False,
-            'intensity_percent': 0.0,
-            'duration_minutes': 0.0,
-            'start_timestep': 0
-        }
-        self.timestep = 0
-        self._generate_exercise_schedule()
-        
-        # Original reset code
-        if self.update_seed_on_reset:
-            self.increment_seed()
-        if self.use_model:
-            if self.load:
-                self.env = joblib.load("{}/{}_fenv.pkl".format(self.pid_env_path, self.patient_name))
-                self.env.model = self.model
-                self.env.model_device = self.model_device
-                self.env.norm_params = self.norm_params
-                self.env.state = self.env.patient.state
-                self.env.scenario.kind = self.kind
-            else:
-                self.env.reset()
-        else:
-            if self.load:
-                if self.use_old_patient_env:
-                    self.env = joblib.load("{}/{}_env.pkl".format(self.pid_env_path, self.patient_name))
-                    self.env.model = None
-                    self.env.scenario.kind = self.kind
-                else:
-                    self.env = joblib.load("{}/{}_fenv.pkl".format(self.pid_env_path, self.patient_name))
-                    self.env.model = None
-                    self.env.scenario.kind = self.kind
-                if self.time_std is not None:
-                    self.env.scenario = SemiRandomBalancedScenario(bw=self.bw, start_time=self.start_time,
-                                                                   seed=self.seeds['scenario'],
-                                                                   time_std_multiplier=self.time_std, kind=self.kind,
-                                                                   harrison_benedict=self.harrison_benedict,
-                                                                   meal_duration=self.meal_duration)
-                self.env.sensor.seed = self.seeds['sensor']
-                self.env.scenario.seed = self.seeds['scenario']
-                self.env.scenario.day = 0
-                self.env.scenario.weekly = self.weekly
-                self.env.scenario.kind = self.kind
-            else:
-                if self.universal:
-                    patient_name = np.random.choice(self.universe)
-                    self.set_patient_dependent_values(patient_name)
-                self.env.sensor.seed = self.seeds['sensor']
-                self.env.scenario.seed = self.seeds['scenario']
-                self.env.reset()
-                self.pid.reset()
-                if self.use_pid_load:
-                    self.pid_load(1)
-                if self.hist_init:
-                    self._hist_init()
-        
-        # Store original patient parameters after reset
-        self._store_original_patient_params()
-        
-        return self.get_state(self.norm)
-
     def _hist_init(self):
-        self.rolling = []
         env_init_dict = copy.deepcopy(self.env_init_dict)
         self.env.patient._state = env_init_dict['state']
         self.env.patient._t = env_init_dict['time']
-        if self.start_date is not None:
-            orig_start_time = env_init_dict['time_hist'][0]
-            new_start_time = datetime(year=self.start_date.year, month=self.start_date.month,
-                                      day=self.start_date.day)
-            new_time_hist = ((np.array(env_init_dict['time_hist']) - orig_start_time) + new_start_time).tolist()
-            self.env.time_hist = new_time_hist
-        else:
-            self.env.time_hist = env_init_dict['time_hist']
+        self.env.time_hist = env_init_dict['time_hist']
         self.env.BG_hist = env_init_dict['bg_hist']
         self.env.CGM_hist = env_init_dict['cgm_hist']
         self.env.risk_hist = env_init_dict['risk_hist']
@@ -654,18 +324,11 @@ class DeepSACT1DEnv(gym.Env):
     @property
     def observation_space(self):
         st = self.get_state()
-        if self.gt:
-            # For ground truth mode, add 5 exercise dimensions
-            return spaces.Box(low=0, high=np.inf, shape=(len(st),))
-        else:
-            # For non-GT mode, add 5 exercise channels
-            num_channels = int(len(st)/self.state_hist)
-            return spaces.Box(low=0, high=np.inf, shape=(num_channels, self.state_hist))
+        num_channels = int(len(st) / self.state_hist)
+        return spaces.Box(low=0, high=np.inf, shape=(num_channels, self.state_hist))
     
     def render(self, mode='human'):
-        """Render the environment (optional)"""
         pass
     
     def close(self):
-        """Close the environment (optional)"""
         pass
