@@ -7,12 +7,13 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from stable_baselines3.common.monitor import Monitor
 from gymnasium import spaces
 
-bgp_path = r'C:\Users\Owen Tucker\work\t1dino\RL4BG'
+bgp_path = r'C:\Users\owenj\source\t1d_emory\d1no\RL4BG'
 if bgp_path not in sys.path:
     sys.path.insert(0, bgp_path)
 
 from bgp.simglucose.envs.exercise_aware_env import DeepSACT1DEnv
 from bgp.rl.reward_functions import magni_reward
+import pickle
 
 class GymToGymnasiumWrapper(gym.Env):
     def __init__(self, env):
@@ -58,6 +59,30 @@ class GymToGymnasiumWrapper(gym.Env):
     
     def close(self):
         return self.env.close()
+    
+class RenderingEvalCallback(EvalCallback):
+    def __init__(self, *args, render_at_end=True, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.render_at_end = render_at_end
+    
+    def _on_step(self) -> bool:
+        continue_training = super()._on_step()
+    
+        if self.render_at_end and self.n_calls % self.eval_freq == 0:
+            try:
+                # unwrap to get to the base DeepSACT1DEnv
+                base_env = self.eval_env.envs[0]
+                while hasattr(base_env, 'env'):
+                    base_env = base_env.env
+                
+                # render the completed episode
+                base_env.render()
+                print(f"\nRendered evaluation at step {self.num_timesteps}")
+                
+            except Exception as e:
+                print(f"Could not render: {e}")
+        
+        return continue_training
 
 class NextStateRewardWrapper(gym.Wrapper):
     def __init__(self, env):
@@ -83,7 +108,7 @@ class NextStateRewardWrapper(gym.Wrapper):
         
         return obs, reward, done, truncated, info
 
-def make_bgp_env(patient_name='adolescent#001', seed=0):
+def make_bgp_env(patient_name='adult#001', seed=0):
     env = DeepSACT1DEnv(
         reward_fun=magni_reward,
         patient_name=patient_name,
@@ -126,7 +151,7 @@ def train_sac():
         clip_obs=10.0,
         training=False
     )
- 
+    
     model = SAC(
         "MlpPolicy",
         train_env,
@@ -148,13 +173,14 @@ def train_sac():
         device='auto'
     )
     
-    eval_callback = EvalCallback(
+    eval_callback = RenderingEvalCallback(  
         eval_env,
         best_model_save_path="./bgp_sac_model/",
         log_path="./bgp_sac_logs/",
         eval_freq=50000,
         deterministic=True,
         n_eval_episodes=1,
+        render_at_end=True
     )
     
     model.learn(

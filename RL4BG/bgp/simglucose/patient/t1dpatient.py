@@ -557,7 +557,7 @@ class T1DPatientNew(Patient):
             Et = params.ke1 * (x[3] - params.ke2)  # equazione 27
         else:
             Et = 0
-        exercise_k1_mult = getattr(params, 'exercise_k1_mult', 1.0) #our exercise scaling for now will be through k1
+        exercise_k1_mult = getattr(params, 'exercise_k1_mult', 1.0) #our exercise scaling will be through k1
         # glucose kinetics
         # plus dextrose IV injection input u[2] if needed
         dxdt[3] = max(EGPt, 0) + Rat - Uiit - Et - exercise_k1_mult * params.k1 * x[3] + params.k2 * x[4]
