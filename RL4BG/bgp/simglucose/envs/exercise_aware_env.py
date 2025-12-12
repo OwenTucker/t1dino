@@ -132,6 +132,7 @@ class DeepSACT1DEnv(gym.Env):
     def _get_exercise_effect(self):
         tau_o = 15
         beta = 0.5
+        #yes
         if self.current_exercise is None:
             if self.timestep in self.exercise_schedule:
                 self.current_exercise = self.exercise_schedule[self.timestep]

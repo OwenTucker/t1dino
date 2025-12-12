@@ -138,7 +138,7 @@ def train_sac():
     train_env = VecNormalize(
         train_env,
         norm_obs=True,
-        norm_reward=False,
+        norm_reward=False,#
         clip_obs=10.0,
         training=True
     )
