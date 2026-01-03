@@ -120,6 +120,7 @@ def make_bgp_env(patient_name='adult#001', seed=0):
         deterministic_meal_size=False,
         deterministic_meal_time=False,
         deterministic_meal_occurrence=False,
+        use_exercise_env=True,
         use_pid_load=False,
         hist_init=True,
         harrison_benedict=True,

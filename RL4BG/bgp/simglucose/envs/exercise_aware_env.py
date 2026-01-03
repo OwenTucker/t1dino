@@ -29,7 +29,7 @@ class DeepSACT1DEnv(gym.Env):
     def __init__(self, reward_fun, patient_name=None, seeds=None, reset_lim=None, 
                  n_hours=4, termination_penalty=None, update_seed_on_reset=False,
                  deterministic_meal_size=False, deterministic_meal_time=False, 
-                 deterministic_meal_occurrence=False, use_pid_load=False, hist_init=False,
+                 deterministic_meal_occurrence=False, use_exercise_env=False, use_pid_load=False, hist_init=False,
                  harrison_benedict=False, restricted_carb=False, meal_duration=1, 
                  universal=False, reward_bias=0, source_dir=None, **kwargs):
       
@@ -49,6 +49,7 @@ class DeepSACT1DEnv(gym.Env):
         self.e2 = None  # insulin sensitivity gain
         self._baseline_vmx = 0
         self._baseline_kp3 = None  #deapreciated 
+        self.use_exercise_env = use_exercise_env
     
         self.exercise_schedule = {}  
         self.current_exercise = None  
@@ -140,7 +141,7 @@ class DeepSACT1DEnv(gym.Env):
         if self.current_exercise is None:
             if self.pexer > 0: self.pexer = self.pexer * (math.e**(-5/self.tau_post))  #essentially if we have exercised before
             else: si_mult = 1
-            if ((self.timestep % 20) == 0): print(f"Si_mult is : {self.pexer}\n")
+            #if ((self.timestep % 20) == 0): print(f"Si_mult is : {self.pexer}\n")
             return (1.0 + self.pexer), 1.0
      
         start_step = self.current_exercise['start_step']
@@ -167,20 +168,22 @@ class DeepSACT1DEnv(gym.Env):
         si_mult = 1.0 + (self.e2 * (PVO2max) * (1-math.e**(-elapsed_min/tau_o)))
         self.iexer = si_mult
         self.exercise_dose = self.exercise_dose + (5 * PVO2max)
-        print(f"We are exercising and our SI_mult is: {si_mult} our GE_mult is: {ge_mult}")
+        #print(f"We are exercising and our SI_mult is: {si_mult} our GE_mult is: {ge_mult}")
         
         
         return si_mult, ge_mult
     
     def _apply_exercise_to_patient(self, si_mult, ge_mult):
+        #print(f'GE_MULT: {ge_mult}, SI_MULT: {si_mult}')
         self.env.patient._params.Vmx = self._baseline_vmx * si_mult  # peripherial insulin sensitivity
         self.env.patient._params.exercise_k1_mult = ge_mult  # glucose effectiveness
         #self.env.patient._params.kp3 = self._baseline_kp3 * si_mult  # insulin sensitivity
 
     def step(self, action):
-        si_mult, ge_mult = self._get_exercise_effect()
-        self._apply_exercise_to_patient(si_mult, ge_mult)
-        
+        if self.use_exercise_env: 
+            si_mult, ge_mult = self._get_exercise_effect()
+            self._apply_exercise_to_patient(si_mult, ge_mult)
+            
         current_hrr = 0
         if self.current_exercise is not None:
             elapsed_steps = self.timestep - self.current_exercise['start_step']
