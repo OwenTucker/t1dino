@@ -1,16 +1,16 @@
 import gymnasium as gym
 import numpy as np
 import sys
+import os
+from pathlib import Path
 from stable_baselines3 import SAC
 from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from stable_baselines3.common.monitor import Monitor
 from gymnasium import spaces
-
-bgp_path = r'C:\Users\owenj\source\t1d_emory\d1no\RL4BG'
-if bgp_path not in sys.path:
-    sys.path.insert(0, bgp_path)
-
+rl4bg_path = Path(__file__).resolve().parent / 'RL4BG'
+if str(rl4bg_path) not in sys.path:
+    sys.path.insert(0, str(rl4bg_path))
 from bgp.simglucose.envs.exercise_aware_env import DeepSACT1DEnv
 from bgp.rl.reward_functions import magni_reward
 import pickle
@@ -76,8 +76,8 @@ class RenderingEvalCallback(EvalCallback):
                     base_env = base_env.env
                 
                 # render the completed episode
-                base_env.render()
-                print(f"\nRendered evaluation at step {self.num_timesteps}")
+                #base_env.render()
+                #print(f"\nRendered evaluation at step {self.num_timesteps}")
                 
             except Exception as e:
                 print(f"Could not render: {e}")
@@ -108,19 +108,19 @@ class NextStateRewardWrapper(gym.Wrapper):
         
         return obs, reward, done, truncated, info
 
-def make_bgp_env(patient_name='adult#001', seed=0):
+def make_bgp_env(patient_name='adult#001', seed=0, use_exercise=True): 
     env = DeepSACT1DEnv(
         reward_fun=magni_reward,
         patient_name=patient_name,
         seeds={'numpy': seed, 'sensor': seed, 'scenario': seed},
         reset_lim={'lower_lim': 10, 'upper_lim': 1000},
         n_hours=4,
-        termination_penalty=1e5,
+        termination_penalty=1e7,
         update_seed_on_reset=True,
         deterministic_meal_size=False,
         deterministic_meal_time=False,
         deterministic_meal_occurrence=False,
-        use_exercise_env=True,
+        use_exercise_env=use_exercise, 
         use_pid_load=False,
         hist_init=True,
         harrison_benedict=True,
@@ -128,23 +128,33 @@ def make_bgp_env(patient_name='adult#001', seed=0):
         meal_duration=5,  
         universal=False,
         reward_bias=0,
-        source_dir=bgp_path
+        source_dir=rl4bg_path
     )
     env = GymToGymnasiumWrapper(env) 
     env = NextStateRewardWrapper(env) 
     return Monitor(env)
 
-def train_sac():
-    train_env = DummyVecEnv([lambda: make_bgp_env(seed=42)])
+def train_sac(use_exercise=True, model_name="bgp_sac_glucose"):  # ADD PARAMS
+    train_env = DummyVecEnv([
+        lambda i=i: make_bgp_env(
+            patient_name=f'adult#{i:03d}', 
+            seed=42+i,
+            use_exercise=use_exercise
+        ) 
+        for i in range(1, 11)
+    ])
     train_env = VecNormalize(
         train_env,
         norm_obs=True,
-        norm_reward=False,#
+        norm_reward=False,
         clip_obs=10.0,
         training=True
     )
     
-    eval_env = DummyVecEnv([lambda: make_bgp_env(seed=1000)])
+    eval_env = DummyVecEnv([lambda: make_bgp_env(
+        seed=1000, 
+        use_exercise=use_exercise
+    )])
     eval_env = VecNormalize(
         eval_env,
         norm_obs=True,
@@ -152,7 +162,6 @@ def train_sac():
         clip_obs=10.0,
         training=False
     )
-    
     model = SAC(
         "MlpPolicy",
         train_env,
@@ -180,26 +189,30 @@ def train_sac():
         log_path="./bgp_sac_logs/",
         eval_freq=50000,
         deterministic=True,
-        n_eval_episodes=1,
+        n_eval_episodes=3,
         render_at_end=True
     )
-    
     model.learn(
-        total_timesteps=1_000_000,
+        total_timesteps=2_500_000,
         callback=eval_callback,
         progress_bar=True,
         log_interval=10
     )
     
-    model.save("bgp_sac_glucose")
-    train_env.save("bgp_sac_vec_normalize.pkl")
-    
-    print("\n=== Training Complete ===")
-    
+    model.save(model_name)
+    train_env.save(f"{model_name}_vec_normalize.pkl")
     train_env.close()
     eval_env.close()
     
     return model
 
+
 if __name__ == "__main__":
-    model = train_sac()
+    model_baseline = train_sac(
+        use_exercise=True, 
+        model_name="bgp_sac_glucose_exer_la"
+    )
+    model_baseline = train_sac(
+        use_exercise=False, 
+        model_name="bgp_sac_glucose_no_exer_la"
+    )
