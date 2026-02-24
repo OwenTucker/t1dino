@@ -110,115 +110,115 @@ class DeepSACT1DEnv(gym.Env):
         self.env.scenario.day = 0
 
     def _estimate_exercise_response(self, patient_params): 
-        e1 = 1.6  # these we will change
-        e2 = 0.778
+        e1 = 1.6   
+        e2 = 0.778 
         return e1, e2
 
-    def _generate_exercise_schedule(self):
-        self.exercise_schedule = {}
+    def _generate_exercise_schedule_realistic(self):
+        with open('workout_library_full.pkl', 'rb') as f:
+            lib = pickle.load(f)
         
-        for hour in range(24):
-            timestep = hour * 12  #
-            prob = 0.10 if hour in [6, 7, 17, 18, 19] else (0.5 if hour in [12, 13] else 0.01)
-            
-            if np.random.random() < prob:
-                workout =random.choice(self.workout_lib)  # This is a list of HRR values
-                duration_min = len(workout) * 5  
+        for day in range(10):
+            if np.random.random() < 0.4:
+                workout = np.random.choice(lib['workouts'])
+                timestep = (day * 288) + (workout['start_hour'] * 12)
+                
                 self.exercise_schedule[timestep] = {
-                    'hrr_curve': workout,
-                    'duration_min': duration_min,
+                    'hrr_curve': workout['hrr_curve'],
+                    'duration_min': workout['duration_min'],
                     'start_step': timestep
                 }
-
+                
+    def _apply_exercise_to_patient(self, si_mult, ge_mult):
+        self.env.patient._params.Vmx = self._baseline_vmx * si_mult 
+        self.env.patient._params.exercise_k1_mult = ge_mult 
     def _get_exercise_effect(self):
-        tau_o = 15
-        beta = 0.5
-        #yes
+        beta_p = 0.30  
         if self.current_exercise is None:
             if self.timestep in self.exercise_schedule:
                 self.current_exercise = self.exercise_schedule[self.timestep]
-     
+                self.exercise_dose = 0  
         if self.current_exercise is None:
-            if self.pexer > 0: self.pexer = self.pexer * (math.e**(-5/self.tau_post))  #essentially if we have exercised before
-            else: si_mult = 1
-            #if ((self.timestep % 20) == 0): print(f"Si_mult is : {self.pexer}\n")
-            return (1.0 + self.pexer), 1.0
-     
+            ge_mult = 1.0  
+            if self.pexer > 0:
+                delta_t = 5 / 60  
+                self.pexer = self.pexer * math.exp(-delta_t / self.tau_post)
+            
+            si_mult = 1.0 + self.pexer
+            return si_mult, ge_mult
+  
         start_step = self.current_exercise['start_step']
         elapsed_steps = self.timestep - start_step
         elapsed_min = elapsed_steps * 5
         duration_min = self.current_exercise['duration_min']
         
+       
         if elapsed_min >= duration_min:
+            self.tau_post = (24 + min(self.exercise_dose, 2.0) * 24) * 12  
+            self.pexer = beta_p * self.e2 * self.exercise_dose 
             self.current_exercise = None
-            self.tau_post = (24 + (min(self.exercise_dose, 2)*24)) * 12 #convert to minutes
-            self.pexer = self.iexer * beta
-            print(f"Total exercise dose: {self.exercise_dose} with a length of {duration_min}\n")
             self.exercise_dose = 0
-            self.iexer = 0
-            
-            return (1.0 + self.pexer), 1.0 
+            si_mult = 1.0 + self.pexer
+            ge_mult = 1.0
+            return si_mult, ge_mult
         
+      
         hrr_curve = self.current_exercise['hrr_curve']
-        current_hrr_frac = hrr_curve[elapsed_steps]
-
-        PVO2max = current_hrr_frac # mapping from HRR to vo2 for now
-        
-        ge_mult = 1.0 + self.e1 * PVO2max
-        si_mult = 1.0 + (self.e2 * (PVO2max) * (1-math.e**(-elapsed_min/tau_o)))
-        self.iexer = si_mult
-        self.exercise_dose = self.exercise_dose + (5 * PVO2max)
-        #print(f"We are exercising and our SI_mult is: {si_mult} our GE_mult is: {ge_mult}")
-        
+        current_hrr = hrr_curve[elapsed_steps]
+       
+        ge_mult = 1.0 + self.e1 * current_hrr
+        si_mult = 1.0  
+        delta_t = 5 / 60 
+        self.exercise_dose += current_hrr * delta_t 
         
         return si_mult, ge_mult
-    
-    def _apply_exercise_to_patient(self, si_mult, ge_mult):
-        #print(f'GE_MULT: {ge_mult}, SI_MULT: {si_mult}')
-        self.env.patient._params.Vmx = self._baseline_vmx * si_mult  # peripherial insulin sensitivity
-        self.env.patient._params.exercise_k1_mult = ge_mult  # glucose effectiveness
-        #self.env.patient._params.kp3 = self._baseline_kp3 * si_mult  # insulin sensitivity
-
     def step(self, action):
-        if self.use_exercise_env: 
-            si_mult, ge_mult = self._get_exercise_effect()
-            self._apply_exercise_to_patient(si_mult, ge_mult)
-            
-        current_hrr = 0
-        if self.current_exercise is not None:
-            elapsed_steps = self.timestep - self.current_exercise['start_step']
-            if elapsed_steps < len(self.current_exercise['hrr_curve']):
-                current_hrr = self.current_exercise['hrr_curve'][elapsed_steps]
+        #if self.timestep == 0:
+         #   print(f"[STEP] use_exercise_env={self.use_exercise_env}")
         
-        self.exercise_hist.append(current_hrr)
-        self.si_mult_hist.append(si_mult)
-        self.ge_mult_hist.append(ge_mult)
-      
         if type(action) is np.ndarray:
             action = action.item()
         
         action = (action + 0) * ((self.ideal_basal * 43.2) / 1)
         action = max(0, action)
         
+        if self.use_exercise_env: 
+            si_mult, ge_mult = self._get_exercise_effect()
+            self._apply_exercise_to_patient(si_mult, ge_mult)
+        else:
+            si_mult = 1.0
+            ge_mult = 1.0
+        
         act = Action(basal=0, bolus=action)
         _, reward, _, info = self.env.step(act, reward_fun=self.reward_fun, cho=None)
+        
+        #  exercise history (will be all zeros if disabled)
+        if self.use_exercise_env:
+            current_hrr = 0
+            if self.current_exercise is not None:
+                elapsed_steps = self.timestep - self.current_exercise['start_step']
+                if elapsed_steps < len(self.current_exercise['hrr_curve']):
+                    current_hrr = self.current_exercise['hrr_curve'][elapsed_steps]
+            self.exercise_hist.append(current_hrr)
+        else:
+            self.exercise_hist.append(0) 
+        self.si_mult_hist.append(si_mult)
+        self.ge_mult_hist.append(ge_mult)
+        
+        info.update({
+            'exercise_active': self.current_exercise is not None if self.use_exercise_env else False,
+            'si_multiplier': si_mult,
+            'ge_multiplier': ge_mult,
+            'e1': self.e1 if self.use_exercise_env else 0,
+            'e2': self.e2 if self.use_exercise_env else 0,
+        })
         
         state = self.get_state(normalize=False)
         done = self.is_done()
         truncated = (self.timestep >= 2880)
-
-        if done and not truncated and self.termination_penalty is not None:
-            reward = reward - self.termination_penalty  
-
-        truncated = (self.timestep >= 2880)  
         
-        info.update({
-            'exercise_active': self.current_exercise is not None,
-            'si_multiplier': si_mult,
-            'ge_multiplier': ge_mult,
-            'e1': self.e1,
-            'e2': self.e2,
-        })
+        if done and not truncated and self.termination_penalty is not None:
+            reward = reward - self.termination_penalty
         
         self.timestep += 1
         return state, reward, done, truncated, info
@@ -230,29 +230,35 @@ class DeepSACT1DEnv(gym.Env):
         if normalize:
             bg = np.array(bg) / 400.
             insulin = np.array(insulin) * 10
-        
+
         if len(bg) < self.state_hist:
             bg = np.concatenate((np.full(self.state_hist - len(bg), -1), bg))
         if len(insulin) < self.state_hist:
             insulin = np.concatenate((np.full(self.state_hist - len(insulin), -1), insulin))
         
-        return np.stack([bg, insulin]).flatten()
+        exercise_feature = np.zeros(self.state_hist)
+        
+        if self.use_exercise_env and len(self.exercise_hist) > 0:
+            hist_len = min(len(self.exercise_hist), self.state_hist)
+            for i in range(hist_len):
+                idx = self.state_hist - hist_len + i
+                exercise_feature[idx] = 1.0 if self.exercise_hist[-(hist_len - i)] > 0 else 0.0
+        
+        #return 3 channels regardless of use_exercise_env
+        return np.stack([bg, insulin, exercise_feature]).flatten()
 
     def reset(self):
         self.timestep = 0
         self.current_exercise = None
         self.exercise_dose = 0
-        self.iexer = 0
-        self.pexer = 0
-        self.tau_post = 0
+        self.pexer = 0  
+        self.tau_post = 24 * 12  
         self.exercise_hist = []      
         self.si_mult_hist = []
         self.ge_mult_hist = []
-            
-        self._generate_exercise_schedule()
+        self.exercise_schedule = {}  
         
-        print(f"Generated {len(self.exercise_schedule)} exercise events for {self.patient_name}")
-        print(f"Patient exercise response: e1={self.e1:.3f}, e2={self.e2:.3f}")
+        #print(f"[RESET] use_exercise_env={self.use_exercise_env}")
         
         if self.update_seed_on_reset:
             self.increment_seed()
@@ -265,7 +271,11 @@ class DeepSACT1DEnv(gym.Env):
         self.env.scenario.seed = self.seeds['scenario']
         self.env.reset()
         self.pid.reset()
+
         
+        if self.use_exercise_env:
+            self._generate_exercise_schedule_realistic()
+            #print(f"  Generated {len(self.exercise_schedule)} workouts")
         if self.use_pid_load:
             self.pid_load(1)
         if self.hist_init:
@@ -281,6 +291,8 @@ class DeepSACT1DEnv(gym.Env):
 
     def calculate_iob(self):
         ins = self.env.insulin_hist
+        # In your env, what's the length of the IOB curve?
+        print(f"IOB curve length: {len(self.iob)} timesteps = {len(self.iob) * 5 / 60} hours")
         return np.dot(np.flip(self.iob, axis=0)[-len(ins):], ins[-len(self.iob):])
 
     def avg_risk(self):
