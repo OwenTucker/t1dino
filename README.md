@@ -18,25 +18,25 @@ t1dino/
 
 ## Installation
 
-1. Clone the repository:
+Clone the repository:
 ```bash
 git clone <your-repo-url>
 cd t1dino
 ```
 
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
+Install dependencies/ venv: 
+  `bash
+   py -m venv venv
 ```
-
-## Requirements
-
-- Python 3.8+
-- gymnasium
-- stable-baselines3
-- PyTorch 2.0+
-- NumPy, Pandas, Matplotlib
-- See `requirements.txt` for complete list
+   Windows:
+```bash
+   .\venv\Scripts\activate
+```
+   **Mac/Linux:**
+```bash
+   source venv/bin/activate
+   pip install -r requirements.txt
+```
 
 ## Usage
 
