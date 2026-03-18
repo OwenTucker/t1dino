@@ -41,7 +41,7 @@ class DeepSACT1DEnv(gym.Env):
         self.sensor_para_file = f'{source_dir}/bgp/simglucose/params/sensor_params.csv'
         self.insulin_pump_para_file = f'{source_dir}/bgp/simglucose/params/pump_params.csv'
           
-        with open('workout_library.pkl', 'rb') as f:
+        with open('workout_library_full.pkl', 'rb') as f:
                    workout_library = pickle.load(f)
                    
         self.workout_lib = workout_library

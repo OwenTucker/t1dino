@@ -1,7 +1,7 @@
 gymnasium
 stable-baselines3
 torch>=2.0.0
-numpy>=1.26.0,<2.0.0
+numpy>=2.0.0
 pandas>=2.0.0
 matplotlib
 cloudpickle
