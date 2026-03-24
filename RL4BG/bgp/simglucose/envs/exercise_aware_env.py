@@ -19,8 +19,11 @@ from gym.utils import seeding
 from datetime import datetime
 import warnings
 import pickle
+from pathlib import Path
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
+
+_WORKOUT_LIB_PATH = Path(__file__).resolve().parent / 'workout_library_full.pkl'
 
 class DeepSACT1DEnv(gym.Env):
     
@@ -41,7 +44,7 @@ class DeepSACT1DEnv(gym.Env):
         self.sensor_para_file = f'{source_dir}/bgp/simglucose/params/sensor_params.csv'
         self.insulin_pump_para_file = f'{source_dir}/bgp/simglucose/params/pump_params.csv'
           
-        with open('workout_library_full.pkl', 'rb') as f:
+        with open(_WORKOUT_LIB_PATH, 'rb') as f:
                    workout_library = pickle.load(f)
                    
         self.workout_lib = workout_library
@@ -115,7 +118,7 @@ class DeepSACT1DEnv(gym.Env):
         return e1, e2
 
     def _generate_exercise_schedule_realistic(self):
-        with open('workout_library_full.pkl', 'rb') as f:
+        with open(_WORKOUT_LIB_PATH, 'rb') as f:
             lib = pickle.load(f)
         
         for day in range(10):

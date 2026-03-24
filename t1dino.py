@@ -15,6 +15,7 @@ from bgp.simglucose.envs.exercise_aware_env import DeepSACT1DEnv
 from bgp.rl.reward_functions import magni_reward
 import pickle
 
+
 class GymToGymnasiumWrapper(gym.Env):
     def __init__(self, env):
         self.env = env
